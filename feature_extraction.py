@@ -6,16 +6,18 @@ import numpy as np
 from time import time
 from sklearn.cluster import KMeans, SpectralClustering
 from sklearn.manifold import TSNE
-from sklearn.decomposition import PCA
+from sklearn.decomposition import LatentDirichletAllocation
 import os
 from tensorflow.keras.utils import to_categorical
 import warnings
 from nltk.util import ngrams
-from scipy.signal import resample
+from scipy.signal import welch
 from cvxEDA.src.cvxEDA import *
+from pywt import wavedec
 
-N_FEATURE = 14
-SIZE_W = 10
+N_FEATURE_ACC = 18
+N_FEATURE_EDA = 10
+SIZE_W = 30
 
 colors = ["#00b3b3","#ff66cc","#00b300","#0000b3","#bb99ff",
           "#cccc00","#e60000","#993333","#808000","#003300",
@@ -32,12 +34,14 @@ def compute_entropy(x):
 
     return -np.sum(p*np.log(p+1e-10))
 
-def compute_features(y):
+def compute_features(y,type_,sr):
 
+    if type_ == 'acc':
+        features = np.zeros((y.shape[0],N_FEATURE_ACC*y.shape[-1]))
+    elif type_ == "eda":
+        features = np.zeros((y.shape[0],N_FEATURE_EDA*y.shape[-1]))
 
-    features = np.zeros((y.shape[0],N_FEATURE*y.shape[-1]))
-
-    for i,x in enumerate(y):
+    for i,x in enumerate(y[1:]):
 
         
 
@@ -48,20 +52,53 @@ def compute_features(y):
 
             x_znormed = normalize(x_ch,z_score=True)
 
-            S = np.fft.fft(x_znormed)
-            x_fft = abs(x)[:len(S)//2]
-            f0 = np.argmax(S)
-            first_diff = [x_ch[k+1] - x_ch[k] for k in range(len(x)-1)]
+            if type_ == 'acc':
+
+                S = np.fft.fft(x_znormed)
+                x_fft = abs(x)[:len(S)//2]
+                f0 = np.argmax(S)
+                first_diff = [x_ch[k+1] - x_ch[k] for k in range(len(x)-1)]
 
 
-            features[i,ch*N_FEATURE:(ch+1)*N_FEATURE] = [np.mean(x_ch),np.std(x_ch),np.median(x_ch),
-                                                        np.min(x_ch),np.max(x_ch),np.percentile(x_ch,25),
-                                                        np.percentile(x_ch,75),np.sqrt(np.mean(x_ch**2)),
-                                                        compute_entropy(x_ch),compute_entropy(x_fft),
-                                                        int(np.sqrt(np.mean(x_fft**2))),
-                                                        100/f0 if f0!=0 else 0,np.mean(first_diff),
-                                                        np.std(first_diff)]
+                wavelet_coef = wavedec(x_ch,'db4',level=4)
+                mean_dcoef = [np.mean(wcoef**2) for wcoef in wavelet_coef[1:]]
 
+
+                features[i,ch*N_FEATURE_ACC:(ch+1)*N_FEATURE_ACC] = [np.mean(x_ch),np.std(x_ch),np.median(x_ch),
+                                                            np.min(x_ch),np.max(x_ch),np.percentile(x_ch,25),
+                                                            np.percentile(x_ch,75),np.sqrt(np.mean(x_ch**2)),
+                                                            compute_entropy(x_ch),compute_entropy(x_fft),
+                                                            int(np.sqrt(np.mean(x_fft**2))),
+                                                            100/f0 if f0!=0 else 0,np.mean(first_diff),
+                                                            np.std(first_diff)] + mean_dcoef
+
+
+            elif type_=='eda':
+
+   
+                [phasic,p,tonic,_,_,_,_] = cvxEDA(x_ch,1./sr,options={'show_progress':False}) 
+
+                ns_edr_freq = len(p[p>(np.mean(p)+np.std(p))])
+                amp_sum = np.mean(p[p>(np.mean(p)+np.std(p))])
+
+                # f,eda_psd = welch(x_ch,sr,nperseg=len(x_ch))
+                # f_lim = f[f>=0.045]
+                # f_lim = f_lim[f_lim<=0.25]
+                # eda_symp = eda_psd[f==f_lim]
+
+                features[i,ch*N_FEATURE_EDA:(ch+1)*N_FEATURE_EDA] = [np.median(phasic),np.median(tonic),
+                                                             np.sum(phasic)/len(phasic),np.sum(tonic)/len(tonic),
+                                                             np.std(phasic),np.std(tonic),
+                                                             np.max(phasic),np.max(tonic),
+                                                             ns_edr_freq,amp_sum]
+
+
+
+            else:
+
+                warnings.warn("Unknown sensor type")
+
+                
 
     return np.array(features,dtype=np.float32)
 
@@ -80,7 +117,7 @@ def normalize(x,z_score=False,nmin=0,nmax=1):
 
 
 
-def extract_window(data):
+def extract_window(data,type_):
 
     sr = data[1,0]
     data = data[2:]
@@ -91,7 +128,7 @@ def extract_window(data):
     data = data[:int(L*SIZE_W*sr)]
 
 
-    return compute_features(np.stack(np.array_split(data,L)))
+    return compute_features(np.stack(np.array_split(data,L)),type_,sr)
 
 
 
@@ -127,14 +164,15 @@ def build_feature_dataset(load):
             path = 'dataset/Data/'+i+'/'+s+'/EDA.csv'
             data_eda = pd.read_csv(path,header=None).to_numpy()
 
-            [phasic,_,tonic,_,_,_,_] = cvxEDA(data_eda[2:].T[0],1./data_eda[1,0]) 
+            # [phasic,_,tonic,_,_,_,_] = cvxEDA(data_eda[2:].T[0],1./data_eda[1,0]) 
 
 
-            data_eda_comp = np.concatenate((phasic.reshape(-1,1),tonic.reshape(-1,1)),axis=1)
-            data_eda_comp = np.concatenate((np.repeat(data_eda[:2],2,axis=1),data_eda_comp),axis=0)
-    
-            z += [np.concatenate((extract_window(data_acc[:,np.newaxis]), 
-                                  extract_window(data_eda_comp)),axis=1)]
+            # data_eda_comp = np.concatenate((phasic.reshape(-1,1),tonic.reshape(-1,1)),axis=1)
+            # data_eda_comp = np.concatenate((np.repeat(data_eda[:2],2,axis=1),data_eda_comp),axis=0)
+
+            # z += [extract_window(data_acc[:,np.newaxis])]
+            z += [np.concatenate((extract_window(data_acc[:,np.newaxis],'acc'), 
+                                  extract_window(data_eda,'eda')),axis=1)]
             index.append(z[-1].shape[0])
 
         print()
@@ -277,8 +315,27 @@ if __name__ == "__main__":
 
 
     f_extract = FeatureAnalysis(tfidf=True,C=20,load_feature=True)
-    # print(f_extract.index)
+    C = f_extract.num_words
+    
     f_extract.word_bagging()
+
+
+    index_0 = f_extract.index[0,0]
+    # print(f_extract.index)
+
+    # bigrams_s1_m1 = list(ngrams(f_extract.dictionnary.labels_[:index_0],2))
+    # idx = [(i,j) for i in range(C) for j in range(C)]# for k in range(C)]
+    # histo_grams = [[sum([v==(i,j) for v in bigrams_s1_m1]) for j in range(C)] for i in range(C)]
+    # #histo_grams = [[sum([v==(i,j) for v in bigrams_s1_m1]) for j in range(f_extract.num_words)] for i in range(f_extract.num_words)]
+    # plt.pcolormesh(histo_grams)
+    # #plt.matshow(histo_grams)
+    # plt.xticks(np.arange(1,C+1),labels=[i+1 for i in range(C)])
+    # plt.yticks(np.arange(1,C+1),labels=[i+1 for i in range(C)])
+    # plt.grid()
+    # plt.colorbar()
+    # plt.show()
+    # input()
+
 
     # # plt.figure()
     # # for k in range(f_extract.num_words):
@@ -299,8 +356,8 @@ if __name__ == "__main__":
     
     
     
-    #z_session = PCA(n_components=2).fit_transform(normalize(labels))
-    z_session = TSNE(n_components=2,perplexity=7,random_state=0,init='pca',learning_rate='auto').fit_transform(labels)
+    #z_session = LatentDirichletAllocation(n_components=2,random_state=42).fit_transform(normalize(labels))
+    z_session = TSNE(n_components=2,perplexity=5,random_state=0,init='pca',learning_rate='auto').fit_transform(labels)
     z_session = normalize(z_session,z_score=True)
 
 
