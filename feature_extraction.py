@@ -1,6 +1,9 @@
 from tkinter import N
 from tkinter.ttk import LabeledScale
+from urllib.parse import non_hierarchical
 import pandas as pd
+from matplotlib import animation
+from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import numpy as np
 from time import time
@@ -15,9 +18,9 @@ from scipy.signal import welch
 from cvxEDA.src.cvxEDA import *
 from pywt import wavedec
 
-N_FEATURE_ACC = 18
+N_FEATURE_ACC = 14
 N_FEATURE_EDA = 10
-SIZE_W = 30
+SIZE_W = 10
 
 colors = ["#00b3b3","#ff66cc","#00b300","#0000b3","#bb99ff",
           "#cccc00","#e60000","#993333","#808000","#003300",
@@ -64,13 +67,21 @@ def compute_features(y,type_,sr):
                 mean_dcoef = [np.mean(wcoef**2) for wcoef in wavelet_coef[1:]]
 
 
-                features[i,ch*N_FEATURE_ACC:(ch+1)*N_FEATURE_ACC] = [np.mean(x_ch),np.std(x_ch),np.median(x_ch),
-                                                            np.min(x_ch),np.max(x_ch),np.percentile(x_ch,25),
-                                                            np.percentile(x_ch,75),np.sqrt(np.mean(x_ch**2)),
-                                                            compute_entropy(x_ch),compute_entropy(x_fft),
-                                                            int(np.sqrt(np.mean(x_fft**2))),
-                                                            100/f0 if f0!=0 else 0,np.mean(first_diff),
-                                                            np.std(first_diff)] + mean_dcoef
+                features[i,ch*N_FEATURE_ACC:(ch+1)*N_FEATURE_ACC] = \
+                    [np.std(x_ch),np.median(x_ch),
+                    np.min(x_ch),np.max(x_ch),np.sqrt(np.mean(x_ch**2)),
+                    compute_entropy(x_ch),int(np.sqrt(np.mean(x_fft**2))),
+                    100/f0 if f0!=0 else 0,np.mean(first_diff),
+                    np.std(first_diff)] + mean_dcoef
+                    # [np.mean(x_ch),np.std(x_ch),np.median(x_ch),
+                    # np.min(x_ch),np.max(x_ch),np.percentile(x_ch,25),
+                    # np.percentile(x_ch,75),np.sqrt(np.mean(x_ch**2)),
+                    # compute_entropy(x_ch),compute_entropy(x_fft),
+                    # int(np.sqrt(np.mean(x_fft**2))),
+                    # 100/f0 if f0!=0 else 0,np.mean(first_diff),
+                    # np.std(first_diff)] + mean_dcoef
+                    
+                    
 
 
             elif type_=='eda':
@@ -192,7 +203,7 @@ def build_feature_dataset(load):
 
 class FeatureAnalysis:
 
-    def __init__(self,C=10,proj=False,tfidf=True,load_feature=False):
+    def __init__(self,C=10,ngram=1,proj=False,tfidf=True,load_feature=False):
 
         f,index = build_feature_dataset(load=load_feature)
 
@@ -200,8 +211,13 @@ class FeatureAnalysis:
         self.index = index
 
         self.num_words = C
+        self.num_pattern = C
         self.proj_BoW = proj
         self.dictionnary = None
+
+        self.behav_pattern = None
+
+        self.ngram = ngram
 
         self.do_tfidf = tfidf
 
@@ -210,6 +226,33 @@ class FeatureAnalysis:
 
     def get_nested_index(self):
         return np.array([self.index[0]] + [self.index[k] - self.index[k-1][-1] for k in range(1,self.index.shape[0])])
+
+
+    def ngrams2lin(self,label):
+
+        index_lin = []
+        for e in label:
+            index = 0
+            for i,l in enumerate(e):
+                index += l*(self.num_words**(self.ngram-i-1))
+     
+            index_lin.append(index)
+
+        return np.array(index_lin)
+
+    def lin2ngrams(self,label):
+
+        index_gram = []
+        for e in label:
+            index = []
+            for i in range(self.ngram-1):
+                index.append(int(e//self.num_words**(self.ngram-i-1)))
+            index.append((e//self.num_words)%self.num_words)
+     
+            index_gram.append(tuple(index))
+
+        return index_gram
+
 
 
 
@@ -227,6 +270,13 @@ class FeatureAnalysis:
             z_embedded = self.features 
 
         return z_embedded
+
+
+    def compute_doc_term_matrix(self):
+        label_id = np.array_split(self.behav_pattern,self.index.ravel())[:-1]
+        term_per_doc = np.array([[len(l[l==k]) for k in range(self.pattern)] for l in label_id])
+
+        return term_per_doc
 
 
     def word_bagging(self,plot=True,tfidf=True):
@@ -247,22 +297,29 @@ class FeatureAnalysis:
             warnings.warn("Warning: Bag of Words was created in the feature space. If you want to visualize words in 2D, perform clustering in the 2D space with proj=True at initialization")
 
 
-        if tfidf:
-
-            label_id = np.array_split(self.dictionnary.labels_,self.index.ravel())[:-1]
-            term_per_doc = np.array([[len(l[l==k]) for k in range(self.num_words)] for l in label_id])
-            self.idf = np.log(self.index.size/np.array([1 + len(v[v!=0]) for v in term_per_doc.T]))
+        if self.ngram > 1:
+            self.behav_pattern = self.ngrams2lin(list(ngrams(self.dictionnary.labels_,self.ngram)))
+            self.pattern = self.num_words**self.ngram
         else:
-            self.idf = np.ones(self.num_words)/self.num_words
+            self.behav_pattern = self.dictionnary.labels_
 
 
-        return self.dictionnary.labels_
+
+        if tfidf:
+            term_per_doc = self.compute_doc_term_matrix()
+            self.idf = 1 + np.log(self.index.size/np.array([1 + len(v[v!=0]) for v in term_per_doc.T]))
+        else:
+            self.idf = np.ones(self.pattern)/self.pattern
+
+
+        
+
+        return self.behav_pattern
 
 
     def get_session_embedding(self):
 
-        label_id = np.array_split(self.dictionnary.labels_,self.index.ravel())[:-1]
-        term_per_doc = np.array([[len(l[l==k]) for k in range(self.num_words)] for l in label_id])
+        term_per_doc = self.compute_doc_term_matrix()
         tf = np.array([v/np.sum(v) for v in term_per_doc])
 
         tfidf = tf*np.tile(self.idf[np.newaxis,:],(tf.shape[0],1))
@@ -270,12 +327,11 @@ class FeatureAnalysis:
         if not self.do_tfidf:
             tfidf = np.ones(tfidf.shape)
 
-        labels_tfidf = np.zeros((self.index.size,self.num_words))
+        labels_tfidf = np.zeros((self.index.size,self.pattern))
         
         last_idx=0
         for k,idx in enumerate(self.index.ravel()):
-
-            temp = to_categorical(self.dictionnary.labels_[last_idx:idx],self.num_words)
+            temp = to_categorical(self.behav_pattern[last_idx:idx],self.pattern)
             labels_tfidf[k,:] = np.sum(temp,axis=0)*tfidf[k]
             last_idx = idx
 
@@ -314,27 +370,57 @@ if __name__ == "__main__":
     # plt.legend()
 
 
-    f_extract = FeatureAnalysis(tfidf=True,C=20,load_feature=True)
+    f_extract = FeatureAnalysis(tfidf=True,C=20,load_feature=True,ngram=2)
     C = f_extract.num_words
     
     f_extract.word_bagging()
 
 
-    index_0 = f_extract.index[0,0]
-    # print(f_extract.index)
+    plt.hist(f_extract.behav_pattern,bins=np.arange(C**f_extract.ngram),density=True)
+    plt.xlabel("Behavioral bi-grams")
+    plt.ylabel("Frequency")
+    plt.title("Histogram of behavioral patterns")
 
-    # bigrams_s1_m1 = list(ngrams(f_extract.dictionnary.labels_[:index_0],2))
-    # idx = [(i,j) for i in range(C) for j in range(C)]# for k in range(C)]
-    # histo_grams = [[sum([v==(i,j) for v in bigrams_s1_m1]) for j in range(C)] for i in range(C)]
-    # #histo_grams = [[sum([v==(i,j) for v in bigrams_s1_m1]) for j in range(f_extract.num_words)] for i in range(f_extract.num_words)]
-    # plt.pcolormesh(histo_grams)
-    # #plt.matshow(histo_grams)
-    # plt.xticks(np.arange(1,C+1),labels=[i+1 for i in range(C)])
-    # plt.yticks(np.arange(1,C+1),labels=[i+1 for i in range(C)])
-    # plt.grid()
-    # plt.colorbar()
-    # plt.show()
-    # input()
+
+    
+
+    plt.show()
+
+
+    plt.figure()
+
+    bigrams = f_extract.lin2ngrams(f_extract.behav_pattern)
+
+    #idx = [(i,j) for i in range(C) for j in range(C)]# for k in range(C)]
+    # histo_grams = [[sum([v==(i,j) for v in bigrams]) for j in range(C)] for i in range(C)]
+    # identical = 0
+
+    histo_grams = []
+    identical = 0
+    for i in range(C):
+        row = []
+        for j in range(C):
+            if i==j:
+                identical += len(f_extract.behav_pattern[f_extract.behav_pattern==C*i+j])
+            row.append(len(f_extract.behav_pattern[f_extract.behav_pattern==C*i+j]))
+        histo_grams.append(row)
+
+
+
+    
+    
+    non_identical = 100*(1 - identical/len(f_extract.behav_pattern))
+    # print(identical,len(f_extract.behav_pattern))
+    print("\nRate of non-redondant pattern", non_identical)
+    #histo_grams = [[sum([v==(i,j) for v in bigrams_s1_m1]) for j in range(f_extract.num_words)] for i in range(f_extract.num_words)]
+    plt.pcolormesh(np.array(histo_grams)/len(bigrams))
+    #plt.matshow(histo_grams)
+    plt.xticks(np.arange(1,C+1),labels=[i+1 for i in range(C)])
+    plt.yticks(np.arange(1,C+1),labels=[i+1 for i in range(C)])
+    plt.grid()
+    plt.colorbar()
+    plt.show()
+
 
 
     # # plt.figure()
@@ -346,8 +432,25 @@ if __name__ == "__main__":
     # #     plt.yticks([])
 
 
-    
+    term_per_doc = f_extract.compute_doc_term_matrix()
+    term_per_doc_new = term_per_doc[:,np.sum(term_per_doc!=0,axis=0)!=0]
+    new_idf = f_extract.idf[np.sum(term_per_doc!=0,axis=0)!=0]
+
+    tf = np.array([v/np.sum(v) for v in term_per_doc_new])
+    tfidf = tf*np.tile(new_idf[np.newaxis,:],(tf.shape[0],1))
+
+
+
+    plt.matshow(tfidf)
+    plt.matshow(term_per_doc_new*tfidf)
+    plt.colorbar()
+    plt.show()
+    # document_term_matrix = np.zeros()
+
+    embedded = LatentDirichletAllocation(n_components=128,random_state=42).fit_transform(term_per_doc_new*tfidf)
+    #print(embedded.shape)
     labels = f_extract.get_session_embedding()
+    # plt.plot(f_extract.dictionnary.labels_[:index_0])
 
     # labels_id = labels#np.array_split(labels,10)
     # distance = [[np.linalg.norm(p1 - p2) for p1 in labels_id] for p2 in labels_id]
@@ -357,8 +460,9 @@ if __name__ == "__main__":
     
     
     #z_session = LatentDirichletAllocation(n_components=2,random_state=42).fit_transform(normalize(labels))
-    z_session = TSNE(n_components=2,perplexity=5,random_state=0,init='pca',learning_rate='auto').fit_transform(labels)
+    z_session = TSNE(n_components=2,perplexity=7,random_state=0,init='pca',learning_rate='auto').fit_transform(normalize(embedded,z_score=True))
     z_session = normalize(z_session,z_score=True)
+
 
 
     C = 4
@@ -368,7 +472,7 @@ if __name__ == "__main__":
     
 
     fig = plt.figure()
-    ax = fig.add_subplot(projection='3d')
+    ax = Axes3D(fig)#fig.add_subplot(projection='3d')
 
     for i in range(C):
         #v = z_session[i*3:(i+1)*3]
@@ -388,8 +492,19 @@ if __name__ == "__main__":
 
 
     # plt.title("Session embedding for each student (grade + [session])")
-    plt.legend(loc='center left',bbox_to_anchor=(1.2, 0.5))
+    #plt.legend(loc='center left',bbox_to_anchor=(1.2, 0.5))
+    ax.set_xlabel("t-SNE 1")
+    ax.set_ylabel("t-SNE 2")
+    ax.set_zlabel("grade")
+    fig.legend()
 
+    # def rotate(angle):
+    #     ax.view_init(azim=angle)
+
+    # angle = 3
+    # ani = animation.FuncAnimation(fig, rotate, frames=np.arange(0, 360, angle), interval=50)
+    # ani.save('bigram_C10.gif', writer=animation.PillowWriter(fps=20))
+        
 
 
     plt.show()
