@@ -14,13 +14,14 @@ import os
 from tensorflow.keras.utils import to_categorical
 import warnings
 from nltk.util import ngrams
-from scipy.signal import welch
+from scipy.signal import butter, filtfilt
+from scipy.spatial.distance import jensenshannon
 from cvxEDA.src.cvxEDA import *
 from pywt import wavedec
 
-N_FEATURE_ACC = 14
+N_FEATURE_ACC = 15#19
 N_FEATURE_EDA = 10
-SIZE_W = 10
+SIZE_W = 30
 
 colors = ["#00b3b3","#ff66cc","#00b300","#0000b3","#bb99ff",
           "#cccc00","#e60000","#993333","#808000","#003300",
@@ -41,10 +42,32 @@ def compute_features(y,type_,sr):
 
     if type_ == 'acc':
         features = np.zeros((y.shape[0],N_FEATURE_ACC*y.shape[-1]))
+
+        # filt = butter(10,5,'low',fs=sr)
+
+        # w, h = freqs(filt[0],filt[1])
+
+        # plt.semilogx(w, abs(h))
+        # plt.title('Butterworth filter frequency response')
+
+        # plt.xlabel('Frequency [radians / second]')
+
+        # plt.ylabel('Amplitude [dB]')
+
+        # plt.margins(0, 0.1)
+
+        # plt.grid(which='both', axis='both')
+        # plt.show()
+
+
     elif type_ == "eda":
         features = np.zeros((y.shape[0],N_FEATURE_EDA*y.shape[-1]))
 
+
     for i,x in enumerate(y[1:]):
+
+        # plt.plot(x)
+        # plt.show()
 
         
 
@@ -53,13 +76,63 @@ def compute_features(y,type_,sr):
 
             x_ch = x[:,ch]
 
-            x_znormed = normalize(x_ch,z_score=True)
+
+            
 
             if type_ == 'acc':
 
-                S = np.fft.fft(x_znormed)
-                x_fft = abs(x)[:len(S)//2]
-                f0 = np.argmax(S)
+                #x_filt = filtfilt(filt[0],filt[1],x=x_ch,padlen=10)
+                x_znormed = normalize(x_ch,z_score=True)
+
+                x_zcr = x_znormed - np.mean(x_znormed)
+                zcr = 0.5*np.mean([abs(np.sign(x_zcr[k+1]) - np.sign(x_zcr[k])) for k in range(len(x_zcr)-1)])
+
+                # plt.plot(x_ch)
+                # plt.title(str(zcr))
+                # plt.show()
+
+
+
+                S = np.fft.fft(x_ch)
+                freq = np.fft.fftfreq(len(x_ch))
+                freq = freq[:len(freq)//2]*sr
+                x_fft = normalize(abs(S)[:len(S)//2])
+                x_fft = x_fft/sum(x_fft)
+                
+
+
+                en_lf = np.sum(x_fft[freq<=1]**2)
+                en_hf = np.sum(x_fft[np.logical_and(freq>1,freq<=5)]**2)
+                # plt.subplot(211)
+                # plt.plot(freq[freq<=2],x_fft[freq<=2])
+                # plt.ylim((0,1))
+                # plt.subplot(212)
+                # plt.plot(freq[np.logical_and(freq>1,freq<=5)],x_fft[np.logical_and(freq>1,freq<=5)])
+                # plt.ylim((0,1))
+                # plt.show()
+
+                # S_filt = np.fft.fft(x_filt)
+                # freq_filt = np.fft.fftfreq(len(x_filt))
+        
+
+
+                # f0 = np.argmax(x_fft)
+
+
+                # plt.subplot(121)
+                # plt.plot(x_ch)
+                # # plt.plot(x_filt)
+                # # plt.title(str(i))
+
+
+                # plt.subplot(122)
+                # plt.plot(freq*sr,abs(S))
+
+                # plt.show()
+                
+                # # plt.plot(freq_filt[:len(freq_filt)//2]*sr,abs(S_filt)[:len(freq_filt)//2])
+                # plt.show()
+
                 first_diff = [x_ch[k+1] - x_ch[k] for k in range(len(x)-1)]
 
 
@@ -68,12 +141,12 @@ def compute_features(y,type_,sr):
 
 
                 features[i,ch*N_FEATURE_ACC:(ch+1)*N_FEATURE_ACC] = \
-                    [np.std(x_ch),np.median(x_ch),
+                    [np.std(x_ch),np.median(x_ch),#zcr,
                     np.min(x_ch),np.max(x_ch),np.sqrt(np.mean(x_ch**2)),
-                    compute_entropy(x_ch),int(np.sqrt(np.mean(x_fft**2))),
-                    100/f0 if f0!=0 else 0,np.mean(first_diff),
-                    np.std(first_diff)] + mean_dcoef
-                    # [np.mean(x_ch),np.std(x_ch),np.median(x_ch),
+                    compute_entropy(x_ch),np.mean(first_diff),
+                    en_lf,en_hf,np.std(first_diff),np.mean(wavelet_coef[0])] + mean_dcoef
+
+                    # [np.mean(x_ch),np.std(x_ch),np.median(x_ch),zcr,
                     # np.min(x_ch),np.max(x_ch),np.percentile(x_ch,25),
                     # np.percentile(x_ch,75),np.sqrt(np.mean(x_ch**2)),
                     # compute_entropy(x_ch),compute_entropy(x_fft),
@@ -81,10 +154,14 @@ def compute_features(y,type_,sr):
                     # 100/f0 if f0!=0 else 0,np.mean(first_diff),
                     # np.std(first_diff)] + mean_dcoef
                     
+
+
                     
 
 
             elif type_=='eda':
+
+                x_znormed = normalize(x_ch,z_score=True)
 
    
                 [phasic,p,tonic,_,_,_,_] = cvxEDA(x_ch,1./sr,options={'show_progress':False}) 
@@ -134,6 +211,11 @@ def extract_window(data,type_):
     data = data[2:]
     
 
+
+    # data = resample(data,int(len(data)//downsample))
+    # sr = int(sr//downsample)
+
+
     L = len(data)//(SIZE_W*sr)
 
     data = data[:int(L*SIZE_W*sr)]
@@ -168,8 +250,28 @@ def build_feature_dataset(load):
 
             path = 'dataset/Data/'+i+'/'+s+'/ACC.csv'
             data_acc = pd.read_csv(path,header=None).to_numpy()
-            data_acc[2:,0] = np.sqrt(np.sum(data_acc[2:]**2,axis=1))
-            data_acc = data_acc[:,0]
+
+            # plt.plot(data_acc[2+(SIZE_W*32)*6:2+(SIZE_W*32)*7])
+            # plt.show()
+
+            filt = butter(10,3,'low',fs=32)
+
+            for k in range(3):
+                data_acc[2:,k] = filtfilt(filt[0],filt[1],data_acc[2:,k],padlen=10)
+
+
+            # plt.plot(data_acc[2+(SIZE_W*32)*6:2+(SIZE_W*32)*7])
+            # plt.show()
+
+   
+            data_acc[2:,0] = np.sqrt(np.sum(normalize(data_acc[2:],z_score=True)**2,axis=1))
+            data_acc = data_acc[:,0][:,np.newaxis]
+
+            # plt.plot(data_acc[2+(SIZE_W*32)*6:2+(SIZE_W*32)*7])
+            # plt.show()
+
+
+            
 
 
             path = 'dataset/Data/'+i+'/'+s+'/EDA.csv'
@@ -182,7 +284,7 @@ def build_feature_dataset(load):
             # data_eda_comp = np.concatenate((np.repeat(data_eda[:2],2,axis=1),data_eda_comp),axis=0)
 
             # z += [extract_window(data_acc[:,np.newaxis])]
-            z += [np.concatenate((extract_window(data_acc[:,np.newaxis],'acc'), 
+            z += [np.concatenate((extract_window(data_acc,'acc'), 
                                   extract_window(data_eda,'eda')),axis=1)]
             index.append(z[-1].shape[0])
 
@@ -272,11 +374,26 @@ class FeatureAnalysis:
         return z_embedded
 
 
+
     def compute_doc_term_matrix(self):
         label_id = np.array_split(self.behav_pattern,self.index.ravel())[:-1]
-        term_per_doc = np.array([[len(l[l==k]) for k in range(self.pattern)] for l in label_id])
+        term_per_doc = np.array([[len(l[l==k]) for k in range(self.num_words**self.ngram)] for l in label_id])
 
-        return term_per_doc
+        non_zero = np.argwhere(np.sum(term_per_doc!=0,axis=0)!=0).ravel()
+
+        distrib = np.sum(term_per_doc,axis=0)
+        distrib = distrib/np.sum(distrib)
+        top_pattern = np.argsort(distrib)[:-1]
+        print(top_pattern)
+
+        new_pattern = np.intersect1d(non_zero,top_pattern)
+        
+        
+
+        compressed_term_matrix = np.squeeze(term_per_doc[:,new_pattern])
+
+
+        return term_per_doc, compressed_term_matrix, new_pattern
 
 
     def word_bagging(self,plot=True,tfidf=True):
@@ -297,49 +414,58 @@ class FeatureAnalysis:
             warnings.warn("Warning: Bag of Words was created in the feature space. If you want to visualize words in 2D, perform clustering in the 2D space with proj=True at initialization")
 
 
+        
+
         if self.ngram > 1:
             self.behav_pattern = self.ngrams2lin(list(ngrams(self.dictionnary.labels_,self.ngram)))
-            self.pattern = self.num_words**self.ngram
+            _, _, new_pattern = self.compute_doc_term_matrix()
+            self.num_pattern = len(new_pattern)
         else:
             self.behav_pattern = self.dictionnary.labels_
 
 
 
         if tfidf:
-            term_per_doc = self.compute_doc_term_matrix()
-            self.idf = 1 + np.log(self.index.size/np.array([1 + len(v[v!=0]) for v in term_per_doc.T]))
+            _, c_term_matrix, _ = self.compute_doc_term_matrix()
+            self.idf = 1 + np.log(1 + self.index.size/np.array([len(v[v!=0]) for v in c_term_matrix.T]))
         else:
-            self.idf = np.ones(self.pattern)/self.pattern
+            self.idf = np.ones(self.pattern)/self.num_pattern
 
 
-        
 
         return self.behav_pattern
 
 
-    def get_session_embedding(self):
+    def get_session_embedding(self,n_topic=64):
 
-        term_per_doc = self.compute_doc_term_matrix()
-        tf = np.array([v/np.sum(v) for v in term_per_doc])
+        _, c_term_matrix, _ = self.compute_doc_term_matrix()
+
+
+        tf = np.array([v/np.sum(v) for v in c_term_matrix])
 
         tfidf = tf*np.tile(self.idf[np.newaxis,:],(tf.shape[0],1))
 
-        if not self.do_tfidf:
-            tfidf = np.ones(tfidf.shape)
-
-        labels_tfidf = np.zeros((self.index.size,self.pattern))
-        
-        last_idx=0
-        for k,idx in enumerate(self.index.ravel()):
-            temp = to_categorical(self.behav_pattern[last_idx:idx],self.pattern)
-            labels_tfidf[k,:] = np.sum(temp,axis=0)*tfidf[k]
-            last_idx = idx
+        # plt.subplot(121)
+        # plt.pcolormesh(tfidf)
+        # plt.subplot(122)
+        # plt.pcolormesh(c_term_matrix)
+        # plt.show()
 
 
+        lda_input = c_term_matrix*tfidf
 
-        return labels_tfidf
+        topic_model = LatentDirichletAllocation(n_components=n_topic,random_state=42,max_iter=50)
+        embedded = topic_model.fit_transform(lda_input)
+        #print(embedded)
+        # distance_embedded = [[jensenshannon(t1,t2) for t2 in embedded] for t1 in embedded]
+        # plt.pcolormesh(distance_embedded)
+        # plt.xticks(np.arange(0,31,3))
+        # plt.yticks(np.arange(0,31,3))
+        # plt.grid()
+        # plt.colorbar()
+        # plt.show()
 
-        
+        return embedded
 
 
 
@@ -369,8 +495,17 @@ if __name__ == "__main__":
     #     plt.plot(list(map(int,grades[k])),label=str(k+1))
     # plt.legend()
 
+    # inertia = []
 
-    f_extract = FeatureAnalysis(tfidf=True,C=20,load_feature=True,ngram=2)
+    # for K in range(5,100,5):
+    #     f_extract = FeatureAnalysis(tfidf=True,C=K,load_feature=True,ngram=2)
+    #     f_extract.word_bagging()
+    #     inertia.append(f_extract.dictionnary.inertia_)
+
+    # plt.plot(list(range(5,100,5)),inertia)
+    # plt.show()
+
+    f_extract = FeatureAnalysis(tfidf=True,C=10,load_feature=True,ngram=2)
     C = f_extract.num_words
     
     f_extract.word_bagging()
@@ -411,10 +546,8 @@ if __name__ == "__main__":
     
     non_identical = 100*(1 - identical/len(f_extract.behav_pattern))
     # print(identical,len(f_extract.behav_pattern))
-    print("\nRate of non-redondant pattern", non_identical)
-    #histo_grams = [[sum([v==(i,j) for v in bigrams_s1_m1]) for j in range(f_extract.num_words)] for i in range(f_extract.num_words)]
+    print(f"\nRate of non-redondant pattern : {non_identical:.2f} %")
     plt.pcolormesh(np.array(histo_grams)/len(bigrams))
-    #plt.matshow(histo_grams)
     plt.xticks(np.arange(1,C+1),labels=[i+1 for i in range(C)])
     plt.yticks(np.arange(1,C+1),labels=[i+1 for i in range(C)])
     plt.grid()
@@ -423,33 +556,28 @@ if __name__ == "__main__":
 
 
 
-    # # plt.figure()
-    # # for k in range(f_extract.num_words):
-    # #     plt.subplot(4,5,k+1)
-    # #     plt.plot(f_extract.dictionnary.cluster_centers_[k])
-    # #     plt.title(str(k+1))
-    # #     plt.xticks([])
-    # #     plt.yticks([])
 
+    # term_per_doc = f_extract.compute_doc_term_matrix()
+    # term_per_doc_new = term_per_doc[:,np.sum(term_per_doc!=0,axis=0)!=0]
 
-    term_per_doc = f_extract.compute_doc_term_matrix()
-    term_per_doc_new = term_per_doc[:,np.sum(term_per_doc!=0,axis=0)!=0]
-    new_idf = f_extract.idf[np.sum(term_per_doc!=0,axis=0)!=0]
+    # print(f"\nCompression ratio : {term_per_doc.shape[1]/term_per_doc_new.shape[1]:.2f}")
 
-    tf = np.array([v/np.sum(v) for v in term_per_doc_new])
-    tfidf = tf*np.tile(new_idf[np.newaxis,:],(tf.shape[0],1))
+    # new_idf = f_extract.idf[np.sum(term_per_doc!=0,axis=0)!=0]
+
+    # tf = np.array([v/np.sum(v) for v in term_per_doc_new])
+    # tfidf = tf*np.tile(new_idf[np.newaxis,:],(tf.shape[0],1))
 
 
 
-    plt.matshow(tfidf)
-    plt.matshow(term_per_doc_new*tfidf)
-    plt.colorbar()
-    plt.show()
+    # plt.matshow(tfidf)
+    # plt.matshow(term_per_doc_new*tfidf)
+    # plt.colorbar()
+    # plt.show()
     # document_term_matrix = np.zeros()
 
-    embedded = LatentDirichletAllocation(n_components=128,random_state=42).fit_transform(term_per_doc_new*tfidf)
+    
     #print(embedded.shape)
-    labels = f_extract.get_session_embedding()
+    embedded = f_extract.get_session_embedding(16)
     # plt.plot(f_extract.dictionnary.labels_[:index_0])
 
     # labels_id = labels#np.array_split(labels,10)
@@ -460,7 +588,7 @@ if __name__ == "__main__":
     
     
     #z_session = LatentDirichletAllocation(n_components=2,random_state=42).fit_transform(normalize(labels))
-    z_session = TSNE(n_components=2,perplexity=7,random_state=0,init='pca',learning_rate='auto').fit_transform(normalize(embedded,z_score=True))
+    z_session = TSNE(n_components=2,perplexity=3,random_state=0,init='pca',learning_rate='auto').fit_transform(normalize(embedded,z_score=True))
     z_session = normalize(z_session,z_score=True)
 
 
