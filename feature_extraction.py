@@ -1,18 +1,26 @@
-from tkinter import N
-from tkinter.ttk import LabeledScale
-from urllib.parse import non_hierarchical
+
+import pwd
 import pandas as pd
+import numpy as np
+from time import time
+import os
+import warnings
+from itertools import product
+
 from matplotlib import animation
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
-import numpy as np
-from time import time
+from matplotlib.colors import Normalize
+
 from sklearn.cluster import KMeans, SpectralClustering
 from sklearn.manifold import TSNE
 from sklearn.decomposition import LatentDirichletAllocation
-import os
+
 from tensorflow.keras.utils import to_categorical
-import warnings
+
+from gensim.models.coherencemodel import CoherenceModel
+from gensim.corpora.dictionary import Dictionary
+
 from nltk.util import ngrams
 from scipy.signal import butter, filtfilt
 from scipy.spatial.distance import jensenshannon
@@ -21,6 +29,7 @@ from pywt import wavedec
 
 N_FEATURE_ACC = 15#19
 N_FEATURE_EDA = 10
+N_FEATURE_HR = 5
 SIZE_W = 30
 
 colors = ["#00b3b3","#ff66cc","#00b300","#0000b3","#bb99ff",
@@ -43,25 +52,12 @@ def compute_features(y,type_,sr):
     if type_ == 'acc':
         features = np.zeros((y.shape[0],N_FEATURE_ACC*y.shape[-1]))
 
-        # filt = butter(10,5,'low',fs=sr)
-
-        # w, h = freqs(filt[0],filt[1])
-
-        # plt.semilogx(w, abs(h))
-        # plt.title('Butterworth filter frequency response')
-
-        # plt.xlabel('Frequency [radians / second]')
-
-        # plt.ylabel('Amplitude [dB]')
-
-        # plt.margins(0, 0.1)
-
-        # plt.grid(which='both', axis='both')
-        # plt.show()
-
-
     elif type_ == "eda":
         features = np.zeros((y.shape[0],N_FEATURE_EDA*y.shape[-1]))
+
+    elif type_ == "hr":
+
+        features = np.zeros((y.shape[0],N_FEATURE_HR*y.shape[-1]))
 
 
     for i,x in enumerate(y[1:]):
@@ -82,9 +78,9 @@ def compute_features(y,type_,sr):
             if type_ == 'acc':
 
                 #x_filt = filtfilt(filt[0],filt[1],x=x_ch,padlen=10)
-                x_znormed = normalize(x_ch,z_score=True)
+                #x_znormed = normalize(x_ch,z_score=True)
 
-                x_zcr = x_znormed - np.mean(x_znormed)
+                x_zcr = x_ch - np.mean(x_ch)
                 zcr = 0.5*np.mean([abs(np.sign(x_zcr[k+1]) - np.sign(x_zcr[k])) for k in range(len(x_zcr)-1)])
 
                 # plt.plot(x_ch)
@@ -97,7 +93,7 @@ def compute_features(y,type_,sr):
                 freq = np.fft.fftfreq(len(x_ch))
                 freq = freq[:len(freq)//2]*sr
                 x_fft = normalize(abs(S)[:len(S)//2])
-                x_fft = x_fft/sum(x_fft)
+                #x_fft = x_fft/sum(x_fft)
                 
 
 
@@ -137,14 +133,14 @@ def compute_features(y,type_,sr):
 
 
                 wavelet_coef = wavedec(x_ch,'db4',level=4)
-                mean_dcoef = [np.mean(wcoef**2) for wcoef in wavelet_coef[1:]]
+                mean_dcoef = [np.mean(wcoef**2) for wcoef in wavelet_coef]
 
 
                 features[i,ch*N_FEATURE_ACC:(ch+1)*N_FEATURE_ACC] = \
-                    [np.std(x_ch),np.median(x_ch),#zcr,
+                    [np.std(x_ch),np.median(x_ch),zcr,
                     np.min(x_ch),np.max(x_ch),np.sqrt(np.mean(x_ch**2)),
                     compute_entropy(x_ch),np.mean(first_diff),
-                    en_lf,en_hf,np.std(first_diff),np.mean(wavelet_coef[0])] + mean_dcoef
+                    en_hf,np.std(first_diff)] + mean_dcoef
 
                     # [np.mean(x_ch),np.std(x_ch),np.median(x_ch),zcr,
                     # np.min(x_ch),np.max(x_ch),np.percentile(x_ch,25),
@@ -161,7 +157,7 @@ def compute_features(y,type_,sr):
 
             elif type_=='eda':
 
-                x_znormed = normalize(x_ch,z_score=True)
+                #x_znormed = normalize(x_ch,z_score=True)
 
    
                 [phasic,p,tonic,_,_,_,_] = cvxEDA(x_ch,1./sr,options={'show_progress':False}) 
@@ -180,6 +176,12 @@ def compute_features(y,type_,sr):
                                                              np.max(phasic),np.max(tonic),
                                                              ns_edr_freq,amp_sum]
 
+
+            elif type_ == "hr":
+
+                features[i,ch*N_FEATURE_HR:(ch+1)*N_FEATURE_HR] = [np.mean(x_ch),np.std(x_ch),
+                                                                   np.median(x_ch),np.quantile(x_ch,.25),
+                                                                   np.quantile(x_ch,.75)]
 
 
             else:
@@ -218,7 +220,7 @@ def extract_window(data,type_):
 
     L = len(data)//(SIZE_W*sr)
 
-    data = data[:int(L*SIZE_W*sr)]
+    data = normalize(data[:int(L*SIZE_W*sr)],z_score=True)
 
 
     return compute_features(np.stack(np.array_split(data,L)),type_,sr)
@@ -264,18 +266,18 @@ def build_feature_dataset(load):
             # plt.show()
 
    
-            data_acc[2:,0] = np.sqrt(np.sum(normalize(data_acc[2:],z_score=True)**2,axis=1))
+            data_acc[2:,0] = np.sqrt(np.sum(data_acc[2:]**2,axis=1))
             data_acc = data_acc[:,0][:,np.newaxis]
 
             # plt.plot(data_acc[2+(SIZE_W*32)*6:2+(SIZE_W*32)*7])
             # plt.show()
 
 
-            
-
-
             path = 'dataset/Data/'+i+'/'+s+'/EDA.csv'
             data_eda = pd.read_csv(path,header=None).to_numpy()
+
+            path = 'dataset/Data/'+i+'/'+s+'/HR.csv'
+            data_hr = pd.read_csv(path,header=None).to_numpy()
 
             # [phasic,_,tonic,_,_,_,_] = cvxEDA(data_eda[2:].T[0],1./data_eda[1,0]) 
 
@@ -284,8 +286,19 @@ def build_feature_dataset(load):
             # data_eda_comp = np.concatenate((np.repeat(data_eda[:2],2,axis=1),data_eda_comp),axis=0)
 
             # z += [extract_window(data_acc[:,np.newaxis])]
-            z += [np.concatenate((extract_window(data_acc,'acc'), 
-                                  extract_window(data_eda,'eda')),axis=1)]
+
+
+            f_acc = extract_window(data_acc,'acc')
+            f_eda = extract_window(data_eda,'eda')
+            f_hr = extract_window(data_hr,'hr')
+
+            min_len = min([f_acc.shape[0],f_eda.shape[0],f_hr.shape[0]])
+
+            features_ = np.concatenate((f_acc[:min_len],f_eda[:min_len],f_hr[:min_len]),axis=1)
+            
+
+            z += [features_]
+            
             index.append(z[-1].shape[0])
 
         print()
@@ -305,7 +318,7 @@ def build_feature_dataset(load):
 
 class FeatureAnalysis:
 
-    def __init__(self,C=10,ngram=1,proj=False,tfidf=True,load_feature=False):
+    def __init__(self,C=10,ngram=1,tfidf=True,load_feature=False):
 
         f,index = build_feature_dataset(load=load_feature)
 
@@ -314,16 +327,17 @@ class FeatureAnalysis:
 
         self.num_words = C
         self.num_pattern = C
-        self.proj_BoW = proj
-        self.dictionnary = None
+   
+        self.dictionary = None
 
         self.behav_pattern = None
 
         self.ngram = ngram
 
         self.do_tfidf = tfidf
-
         self.idf = None
+
+        self.topic_model = None
 
 
     def get_nested_index(self):
@@ -357,117 +371,112 @@ class FeatureAnalysis:
 
 
 
-
-
-    def get_frame_embedding(self,fname="tsne_z-embedded_full"):
-
-        if self.proj_BoW:
-            if os.path.isfile(fname+".npy"):
-                z_embedded = np.load(fname+".npy",allow_pickle=True)
-            else:
-                z_embedded = TSNE(n_components=2,perplexity=50,init='pca',learning_rate='auto').fit_transform(self.features)
-                z_embedded = normalize(z_embedded,z_score=True) 
-                np.save(fname,z_embedded)
-        else:
-            z_embedded = self.features 
-
-        return z_embedded
-
-
-
-    def compute_doc_term_matrix(self):
+    def compute_tf(self):
         label_id = np.array_split(self.behav_pattern,self.index.ravel())[:-1]
-        term_per_doc = np.array([[len(l[l==k]) for k in range(self.num_words**self.ngram)] for l in label_id])
-
-        non_zero = np.argwhere(np.sum(term_per_doc!=0,axis=0)!=0).ravel()
-
-        distrib = np.sum(term_per_doc,axis=0)
-        distrib = distrib/np.sum(distrib)
-        top_pattern = np.argsort(distrib)[:-1]
-        print(top_pattern)
-
-        new_pattern = np.intersect1d(non_zero,top_pattern)
+        tf = np.array([[len(l[l==k]) for k in range(self.num_words**self.ngram)] for l in label_id])
         
+        new_arg = np.argwhere(np.sum(tf!=0,axis=0)!=0).ravel()
+
+
+        return tf, tf[:,new_arg], new_arg
+
+
+    def word_bagging(self):
+
+        z_embedded = normalize(self.features,z_score=True)
+        self.dictionary = KMeans(n_clusters=self.num_words,random_state=42).fit(z_embedded)
         
-
-        compressed_term_matrix = np.squeeze(term_per_doc[:,new_pattern])
-
-
-        return term_per_doc, compressed_term_matrix, new_pattern
-
-
-    def word_bagging(self,plot=True,tfidf=True):
-
-        z_embedded = normalize(self.get_frame_embedding(),z_score=True)
-        self.dictionnary = KMeans(n_clusters=self.num_words,random_state=42).fit(z_embedded)
-        
-
-        if self.proj_BoW and plot:
-            plt.figure()
-            for k in range(self.num_words):
-                plt.scatter(z_embedded[self.dictionnary.labels_==k][:,0],z_embedded[self.dictionnary.labels_==k][:,1],
-                            label=str(k),c=colors[k])
-                plt.title(str(self.num_words)+" clusters")
-                plt.legend(loc='center left',bbox_to_anchor=(1, 0.5))
-
-        else:
-            warnings.warn("Warning: Bag of Words was created in the feature space. If you want to visualize words in 2D, perform clustering in the 2D space with proj=True at initialization")
-
-
         
 
         if self.ngram > 1:
-            self.behav_pattern = self.ngrams2lin(list(ngrams(self.dictionnary.labels_,self.ngram)))
-            _, _, new_pattern = self.compute_doc_term_matrix()
-            self.num_pattern = len(new_pattern)
+            self.behav_pattern = self.ngrams2lin(list(ngrams(self.dictionary.labels_,self.ngram)))
+            tf,_,non_zero = self.compute_tf()
+            print(f"Deleting non-existent n-grams ... Compression rate {tf.shape[1]/non_zero.shape[0]:.2f}")
+            self.behav_pattern = [np.argwhere(l==non_zero)[0][0] for l in self.behav_pattern]
+            
         else:
-            self.behav_pattern = self.dictionnary.labels_
+            self.behav_pattern = self.dictionary.labels_
 
 
 
-        if tfidf:
-            _, c_term_matrix, _ = self.compute_doc_term_matrix()
-            self.idf = 1 + np.log(1 + self.index.size/np.array([len(v[v!=0]) for v in c_term_matrix.T]))
-        else:
-            self.idf = np.ones(self.pattern)/self.num_pattern
+        # if tfidf:
+        #     _, c_term_matrix, _ = self.compute_tf()
+        #     self.idf = np.log(self.index.size/np.array([len(v[v!=0]) for v in c_term_matrix.T]))
+        # else:
+        #     self.idf = np.ones(self.pattern)/self.num_pattern
 
 
 
         return self.behav_pattern
 
 
+    def compute_tfidf(self):
+        tf = self.compute_tf()[0]
+        idf = 0.5 + np.log(0.5 + self.index.size/np.array([len(v[v!=0]) for v in tf.T]))
+
+
     def get_session_embedding(self,n_topic=64):
 
-        _, c_term_matrix, _ = self.compute_doc_term_matrix()
+        tf = self.compute_tf()[1]
 
+        #tfidf = tf*np.tile(self.idf[np.newaxis,:],(tf.shape[0],1))
 
-        tf = np.array([v/np.sum(v) for v in c_term_matrix])
+        lda_input =  tf
 
-        tfidf = tf*np.tile(self.idf[np.newaxis,:],(tf.shape[0],1))
+        self.topic_model = LatentDirichletAllocation(
+                        n_components=n_topic,random_state=42,
+                        max_iter=5,learning_method="online",
+                        learning_offset=50.0)
+        embedded = self.topic_model.fit_transform(lda_input)
 
-        # plt.subplot(121)
-        # plt.pcolormesh(tfidf)
-        # plt.subplot(122)
-        # plt.pcolormesh(c_term_matrix)
-        # plt.show()
-
-
-        lda_input = c_term_matrix*tfidf
-
-        topic_model = LatentDirichletAllocation(n_components=n_topic,random_state=42,max_iter=50)
-        embedded = topic_model.fit_transform(lda_input)
-        #print(embedded)
-        # distance_embedded = [[jensenshannon(t1,t2) for t2 in embedded] for t1 in embedded]
-        # plt.pcolormesh(distance_embedded)
-        # plt.xticks(np.arange(0,31,3))
-        # plt.yticks(np.arange(0,31,3))
-        # plt.grid()
-        # plt.colorbar()
-        # plt.show()
 
         return embedded
 
 
+    def compute_Cuci(self,n_top_word=3):
+
+        n_topic = self.topic_model.n_components
+
+        topics = np.argsort(self.topic_model.components_,axis=1)[:,-n_top_word:]
+
+        pw_one = np.zeros((n_topic,n_top_word))
+        pw_set = np.zeros((n_topic,n_top_word))
+        pw_one_set = np.zeros((n_topic,n_top_word))
+
+
+        behav_proba = self.behav_pattern
+        np.random.shuffle(behav_proba)
+        sw110 = np.array_split(behav_proba,int(len(behav_proba)//110))[:-1]
+
+
+
+        for k in range(n_topic):
+            for l in range(n_top_word):
+
+                for frame in sw110:
+    
+                    f_one = topics[k,l] in frame #all(np.isin([topics[k,l]],frame))
+                    f_set = all(np.isin(topics[k],frame))
+                    f_one_set = f_one and f_set
+
+                    pw_one[k,l] += int(f_one)
+                    pw_set[k,l] += int(f_set)
+                    pw_one_set[k,l] += int(f_one_set)
+
+        pw_one = pw_one/int(len(self.behav_pattern)//110)
+        pw_set = pw_set/int(len(self.behav_pattern)//110)
+        pw_one_set = pw_one_set/int(len(self.behav_pattern)//110)
+                
+
+        m = np.mean([[pw_one_set[k,l]/(1e-10+pw_one[k,l]*pw_set[k,l]) for l in range(n_top_word)] for k in range(n_topic)],axis=1)
+
+        return m
+
+
+        # print(np.split(self.behav_pattern,self.index.ravel())[:-1])
+        # dict_ = Dictionary(np.split(self.behav_pattern,self.index.ravel())[:-1])
+        # cm_ = CoherenceModel(topics=topics,texts=self.compute_tf(),coherence='c_v',dictionary=dict_)
+        
 
 
 
@@ -497,21 +506,25 @@ if __name__ == "__main__":
 
     # inertia = []
 
-    # for K in range(5,100,5):
+    # for K in range(20,100,10):
+    #     print("Clustering",K)
     #     f_extract = FeatureAnalysis(tfidf=True,C=K,load_feature=True,ngram=2)
     #     f_extract.word_bagging()
-    #     inertia.append(f_extract.dictionnary.inertia_)
+    #     inertia.append(f_extract.dictionary.inertia_)
 
-    # plt.plot(list(range(5,100,5)),inertia)
+    # plt.plot(list(range(20,100,10)),inertia)
     # plt.show()
 
-    f_extract = FeatureAnalysis(tfidf=True,C=10,load_feature=True,ngram=2)
-    C = f_extract.num_words
+    f_extract = FeatureAnalysis(tfidf=True,C=50,load_feature=True,ngram=2)
+    
     
     f_extract.word_bagging()
 
+    C = f_extract.num_words
+    nb_w = np.unique(f_extract.behav_pattern).shape[0]
 
-    plt.hist(f_extract.behav_pattern,bins=np.arange(C**f_extract.ngram),density=True)
+
+    plt.hist(f_extract.behav_pattern,bins=np.arange(nb_w),density=True)
     plt.xlabel("Behavioral bi-grams")
     plt.ylabel("Frequency")
     plt.title("Histogram of behavioral patterns")
@@ -524,11 +537,12 @@ if __name__ == "__main__":
 
     plt.figure()
 
-    bigrams = f_extract.lin2ngrams(f_extract.behav_pattern)
+    bigrams = f_extract.ngrams2lin(list(ngrams(f_extract.dictionary.labels_,f_extract.ngram)))
 
     #idx = [(i,j) for i in range(C) for j in range(C)]# for k in range(C)]
     # histo_grams = [[sum([v==(i,j) for v in bigrams]) for j in range(C)] for i in range(C)]
     # identical = 0
+
 
     histo_grams = []
     identical = 0
@@ -536,15 +550,17 @@ if __name__ == "__main__":
         row = []
         for j in range(C):
             if i==j:
-                identical += len(f_extract.behav_pattern[f_extract.behav_pattern==C*i+j])
-            row.append(len(f_extract.behav_pattern[f_extract.behav_pattern==C*i+j]))
+                identical += len(bigrams[bigrams==C*i+j])
+            row.append(len(bigrams[bigrams==C*i+j]))
         histo_grams.append(row)
 
 
 
     
+
+
     
-    non_identical = 100*(1 - identical/len(f_extract.behav_pattern))
+    non_identical = 100*(1 - identical/len(bigrams))
     # print(identical,len(f_extract.behav_pattern))
     print(f"\nRate of non-redondant pattern : {non_identical:.2f} %")
     plt.pcolormesh(np.array(histo_grams)/len(bigrams))
@@ -557,7 +573,7 @@ if __name__ == "__main__":
 
 
 
-    # term_per_doc = f_extract.compute_doc_term_matrix()
+    # term_per_doc = f_extract.compute_tf()
     # term_per_doc_new = term_per_doc[:,np.sum(term_per_doc!=0,axis=0)!=0]
 
     # print(f"\nCompression ratio : {term_per_doc.shape[1]/term_per_doc_new.shape[1]:.2f}")
@@ -577,8 +593,17 @@ if __name__ == "__main__":
 
     
     #print(embedded.shape)
-    embedded = f_extract.get_session_embedding(16)
-    # plt.plot(f_extract.dictionnary.labels_[:index_0])
+    coherence = []
+    for K in [4,8,16,32,64]:
+        embedded = f_extract.get_session_embedding()
+        m = f_extract.compute_Cuci()
+        coherence.append(np.mean(m[m!=0]))
+
+    plt.plot([4,8,16,32,64],coherence)
+    embedded = embedded[:,m!=0]
+    
+ 
+    # plt.plot(f_extract.dictionary.labels_[:index_0])
 
     # labels_id = labels#np.array_split(labels,10)
     # distance = [[np.linalg.norm(p1 - p2) for p1 in labels_id] for p2 in labels_id]
@@ -588,7 +613,7 @@ if __name__ == "__main__":
     
     
     #z_session = LatentDirichletAllocation(n_components=2,random_state=42).fit_transform(normalize(labels))
-    z_session = TSNE(n_components=2,perplexity=3,random_state=0,init='pca',learning_rate='auto').fit_transform(normalize(embedded,z_score=True))
+    z_session = TSNE(n_components=2,perplexity=5,random_state=0,init='pca',learning_rate='auto').fit_transform(normalize(embedded,z_score=True))
     z_session = normalize(z_session,z_score=True)
 
 
@@ -596,8 +621,14 @@ if __name__ == "__main__":
     C = 4
     profile = KMeans(n_clusters=C,random_state=42).fit(z_session)
 
+    # plt.figure()
 
-    
+    # for k in range(C):
+    #     d = embedded[profile.labels_==k]
+    #     plt.subplot(2,2,k+1)
+    #     plt.bar(np.arange(embedded.shape[1]),np.mean(d,axis=0))
+    #     plt.title(str(k)+" "+str(np.mean([[jensenshannon(p1,p2) for p1 in d] for p2 in d])))
+
 
     fig = plt.figure()
     ax = Axes3D(fig)#fig.add_subplot(projection='3d')
@@ -626,6 +657,7 @@ if __name__ == "__main__":
     ax.set_zlabel("grade")
     fig.legend()
 
+
     # def rotate(angle):
     #     ax.view_init(azim=angle)
 
@@ -634,6 +666,18 @@ if __name__ == "__main__":
     # ani.save('bigram_C10.gif', writer=animation.PillowWriter(fps=20))
         
 
+
+    plt.figure()
+
+    for i in range(10):
+
+        v = z_session[i*3:(i+1)*3]    
+        plt.plot(v[:,0],v[:,1],'o-',label=str(i+1))
+
+
+        for k in range(3):
+            plt.annotate(grades[i,k],(v[k][0]+0.01,v[k][1]+0.01))
+            plt.annotate("["+str(k+1)+"]",(v[k][0]+0.01,v[k][1]-0.1))
 
     plt.show()
 
