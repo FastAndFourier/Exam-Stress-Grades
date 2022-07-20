@@ -376,7 +376,14 @@ class FeatureAnalysis:
         tf = np.array([[len(l[l==k]) for k in range(self.num_words**self.ngram)] for l in label_id])
         
         new_arg = np.argwhere(np.sum(tf!=0,axis=0)!=0).ravel()
+        # top_word = np.argsort(np.sum(tf,axis=0))[-1]
 
+        # new_arg = new_arg[new_arg!=top_word]
+        
+
+        # for l in self.behav_pattern:
+        #     print(l,end=" ")
+        #     print(np.argwhere(l==new_arg)[0][0])            
 
         return tf, tf[:,new_arg], new_arg
 
@@ -393,6 +400,7 @@ class FeatureAnalysis:
             tf,_,non_zero = self.compute_tf()
             print(f"Deleting non-existent n-grams ... Compression rate {tf.shape[1]/non_zero.shape[0]:.2f}")
             self.behav_pattern = [np.argwhere(l==non_zero)[0][0] for l in self.behav_pattern]
+            
             
         else:
             self.behav_pattern = self.dictionary.labels_
@@ -418,6 +426,11 @@ class FeatureAnalysis:
     def get_session_embedding(self,n_topic=64):
 
         tf = self.compute_tf()[1]
+
+        low_f_word = np.argwhere(np.sum(tf,axis=0)>=2).ravel()
+        #tf = np.delete(tf,top_word,axis=1)
+        tf = tf[:,low_f_word]
+
 
         #tfidf = tf*np.tile(self.idf[np.newaxis,:],(tf.shape[0],1))
 
@@ -480,6 +493,124 @@ class FeatureAnalysis:
 
 
 
+class CoherenceScore():
+
+    def __init__(self,feature_model:FeatureAnalysis,n_top_word:int=3):
+
+        self.topic_model = feature_model.topic_model
+        self.corpus = feature_model.behav_pattern
+        self.corpus_index = feature_model.index
+        self.n_top_word = n_top_word
+
+
+
+    def compute_c_mass(self):
+
+        """
+            - Segmentation : S_one_pre         {(W',W*)|W'={w_i}; W* ={w_j}; w_i, w_j \in W; i > j}
+            - Probability : P_bd
+            - Confirmation measure : m_lc
+            - Aggregation : arithmetic mean
+        """
+
+
+        n_topic = self.topic_model.n_components
+        topics = np.argsort(self.topic_model.components_,axis=1)[:,-self.n_top_word:]
+
+        seg_set = []
+        for t in topics:
+            temp = []
+            for j in range(self.n_top_word):
+                temp += [[t[v],t[j]] for v in range(j+1,self.n_top_word)]
+
+            seg_set.append(temp)
+                
+        seg_set = np.array(seg_set)        
+    
+        #print([self.topic_model.components_[0,i] for i in seg_set[0]])
+
+        pw_one = np.zeros((n_topic,seg_set[0].shape[0]))
+        pw_pre = np.zeros((n_topic,seg_set[0].shape[0]))
+        pw_one_pre = np.zeros((n_topic,seg_set[0].shape[0]))
+        
+        for k in range(n_topic):
+            for l,s in enumerate(seg_set[k]):
+                for d in np.array_split(self.corpus,self.corpus_index.ravel())[:-1]: 
+                    pw_one[k,l] += int(s[0] in d) 
+                    pw_pre[k,l] += int(s[1] in d)
+                    pw_one_pre[k,l] += int((s[0] in d) and (s[1] in d))
+
+
+            
+
+        #pw_one /= len(self.corpus_index.ravel())
+        pw_pre /= len(self.corpus_index.ravel())
+        pw_one_pre /= len(self.corpus_index.ravel())
+
+
+        pw_pre = pw_pre.astype(np.float16)
+        pw_one_pre = pw_one_pre.astype(np.float16)
+
+
+        m = [np.log((pw_one_pre[k]+1e-2)/pw_pre[k]) for k in range(n_topic)]
+
+        return np.mean(m,axis=1)
+
+
+    def compute_c_v(self):
+
+        """
+            - Segmentation : S_one_set  <=>  {(W',W*)|W'={w_i}; w_i \in W;; W*=W}
+            - Probability : P_sw100
+            - Confirmation measure : ~m_cos(nlr,1) <=> 
+            - Aggregation : arithmetic mean
+        """
+
+
+        n_topic = self.topic_model.n_components
+        topics = np.argsort(self.topic_model.components_,axis=1)[:,-self.n_top_word:]
+
+        seg_set = []
+        for t in topics:
+            temp = []
+            for j in range(self.n_top_word):
+                temp += [[t[v],t[j]] for v in range(j+1,self.n_top_word)]
+
+            seg_set.append(temp)
+                
+        seg_set = np.array(seg_set)        
+    
+
+        pw_one = np.zeros((n_topic,seg_set[0].shape[0]),dtype=np.float16)
+        pw_set = np.zeros((n_topic,seg_set[0].shape[0]),dtype=np.float16)
+        pw_one_set = np.zeros((n_topic,seg_set[0].shape[0]),dtype=np.float16)
+
+        behav_proba = self.behav_pattern
+        np.random.shuffle(behav_proba)
+        sw110 = np.array_split(behav_proba,int(len(behav_proba)//110))[:-1]
+        
+        for k in range(n_topic):
+            for l in range(self.n_top_word):
+                for frame in sw110:
+
+
+                    pw_one[k,l] += int(topics[k,l] in frame)
+                    pw_set[k,l] += int(all(np.isin(topics[k],frame)))
+                    pw_one_set[k,l] += int((topics[k,l] in frame) and (all(np.isin(topics[k],frame))))
+
+
+            
+
+        pw_one /= len(self.corpus_index.ravel())
+        pw_pre /= len(self.corpus_index.ravel())
+        pw_one_pre /= len(self.corpus_index.ravel())
+
+
+        m = []
+
+        return np.mean(m,axis=1)
+        
+
 if __name__ == "__main__":
 
 
@@ -515,7 +646,7 @@ if __name__ == "__main__":
     # plt.plot(list(range(20,100,10)),inertia)
     # plt.show()
 
-    f_extract = FeatureAnalysis(tfidf=True,C=50,load_feature=True,ngram=2)
+    f_extract = FeatureAnalysis(tfidf=True,C=60,load_feature=True,ngram=2)
     
     
     f_extract.word_bagging()
@@ -593,14 +724,29 @@ if __name__ == "__main__":
 
     
     #print(embedded.shape)
-    coherence = []
-    for K in [4,8,16,32,64]:
-        embedded = f_extract.get_session_embedding()
-        m = f_extract.compute_Cuci()
-        coherence.append(np.mean(m[m!=0]))
+    # m_coh = []
+    # coh_25 = []
+    # coh_75 = []
 
-    plt.plot([4,8,16,32,64],coherence)
-    embedded = embedded[:,m!=0]
+    # k_list = [100,150,200,250,300,350]
+
+    # for K in k_list:
+    embedded = f_extract.get_session_embedding(4)
+        # coherence = CoherenceScore(f_extract,n_top_word=5)
+        # m_coh.append(np.mean(coherence.compute_c_mass()))
+        # coh_25.append(np.percentile(coherence.compute_c_mass(),25))
+        # coh_75.append(np.percentile(coherence.compute_c_mass(),75))
+
+    
+
+
+    # plt.plot(k_list,m_coh)
+    # plt.fill_between(k_list,coh_25,coh_75,alpha=0.2)
+    # plt.show()
+
+
+
+
     
  
     # plt.plot(f_extract.dictionary.labels_[:index_0])
@@ -613,7 +759,7 @@ if __name__ == "__main__":
     
     
     #z_session = LatentDirichletAllocation(n_components=2,random_state=42).fit_transform(normalize(labels))
-    z_session = TSNE(n_components=2,perplexity=5,random_state=0,init='pca',learning_rate='auto').fit_transform(normalize(embedded,z_score=True))
+    z_session = TSNE(n_components=2,perplexity=7,random_state=0,init='pca',learning_rate='auto').fit_transform(normalize(embedded,z_score=True))
     z_session = normalize(z_session,z_score=True)
 
 
