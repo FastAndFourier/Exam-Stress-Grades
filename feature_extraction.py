@@ -253,24 +253,15 @@ def build_feature_dataset(load):
             path = 'dataset/Data/'+i+'/'+s+'/ACC.csv'
             data_acc = pd.read_csv(path,header=None).to_numpy()
 
-            # plt.plot(data_acc[2+(SIZE_W*32)*6:2+(SIZE_W*32)*7])
-            # plt.show()
 
             filt = butter(10,3,'low',fs=32)
 
             for k in range(3):
                 data_acc[2:,k] = filtfilt(filt[0],filt[1],data_acc[2:,k],padlen=10)
 
-
-            # plt.plot(data_acc[2+(SIZE_W*32)*6:2+(SIZE_W*32)*7])
-            # plt.show()
-
    
             data_acc[2:,0] = np.sqrt(np.sum(data_acc[2:]**2,axis=1))
             data_acc = data_acc[:,0][:,np.newaxis]
-
-            # plt.plot(data_acc[2+(SIZE_W*32)*6:2+(SIZE_W*32)*7])
-            # plt.show()
 
 
             path = 'dataset/Data/'+i+'/'+s+'/EDA.csv'
@@ -418,23 +409,33 @@ class FeatureAnalysis:
         return self.behav_pattern
 
 
-    def compute_tfidf(self):
-        tf = self.compute_tf()[0]
+    def compute_tfidf(self,tf):
+
         idf = 0.5 + np.log(0.5 + self.index.size/np.array([len(v[v!=0]) for v in tf.T]))
 
+        return tf*np.tile(idf[np.newaxis,:],(tf.shape[0],1))
 
     def get_session_embedding(self,n_topic=64):
 
         tf = self.compute_tf()[1]
 
-        low_f_word = np.argwhere(np.sum(tf,axis=0)>=2).ravel()
-        #tf = np.delete(tf,top_word,axis=1)
-        tf = tf[:,low_f_word]
+        # max_freq = np.argmax(np.sum(tf,axis=0))
+        # tf = np.delete(tf,max_freq,axis=1)
+
+
+        freq = np.array([len(w[w!=0]) for w in tf.T])
+        low_freq = np.argwhere(freq<2)
+        #max_freq = np.argmax(np.sum(tf,axis=0))[np.newaxis]
+        del_index = low_freq#np.concatenate((max_freq,low_freq))
+
+        tf = np.delete(tf,del_index,axis=1)
+    
+        print("Number of words in the dictionnary :",tf.shape[1])
 
 
         #tfidf = tf*np.tile(self.idf[np.newaxis,:],(tf.shape[0],1))
 
-        lda_input =  tf
+        lda_input = self.compute_tfidf(tf)
 
         self.topic_model = LatentDirichletAllocation(
                         n_components=n_topic,random_state=42,
@@ -446,50 +447,7 @@ class FeatureAnalysis:
         return embedded
 
 
-    def compute_Cuci(self,n_top_word=3):
-
-        n_topic = self.topic_model.n_components
-
-        topics = np.argsort(self.topic_model.components_,axis=1)[:,-n_top_word:]
-
-        pw_one = np.zeros((n_topic,n_top_word))
-        pw_set = np.zeros((n_topic,n_top_word))
-        pw_one_set = np.zeros((n_topic,n_top_word))
-
-
-        behav_proba = self.behav_pattern
-        np.random.shuffle(behav_proba)
-        sw110 = np.array_split(behav_proba,int(len(behav_proba)//110))[:-1]
-
-
-
-        for k in range(n_topic):
-            for l in range(n_top_word):
-
-                for frame in sw110:
     
-                    f_one = topics[k,l] in frame #all(np.isin([topics[k,l]],frame))
-                    f_set = all(np.isin(topics[k],frame))
-                    f_one_set = f_one and f_set
-
-                    pw_one[k,l] += int(f_one)
-                    pw_set[k,l] += int(f_set)
-                    pw_one_set[k,l] += int(f_one_set)
-
-        pw_one = pw_one/int(len(self.behav_pattern)//110)
-        pw_set = pw_set/int(len(self.behav_pattern)//110)
-        pw_one_set = pw_one_set/int(len(self.behav_pattern)//110)
-                
-
-        m = np.mean([[pw_one_set[k,l]/(1e-10+pw_one[k,l]*pw_set[k,l]) for l in range(n_top_word)] for k in range(n_topic)],axis=1)
-
-        return m
-
-
-        # print(np.split(self.behav_pattern,self.index.ravel())[:-1])
-        # dict_ = Dictionary(np.split(self.behav_pattern,self.index.ravel())[:-1])
-        # cm_ = CoherenceModel(topics=topics,texts=self.compute_tf(),coherence='c_v',dictionary=dict_)
-        
 
 
 
@@ -646,7 +604,7 @@ if __name__ == "__main__":
     # plt.plot(list(range(20,100,10)),inertia)
     # plt.show()
 
-    f_extract = FeatureAnalysis(tfidf=True,C=60,load_feature=True,ngram=2)
+    f_extract = FeatureAnalysis(tfidf=True,C=50,load_feature=True,ngram=2)
     
     
     f_extract.word_bagging()
@@ -704,34 +662,91 @@ if __name__ == "__main__":
 
 
 
-    # term_per_doc = f_extract.compute_tf()
-    # term_per_doc_new = term_per_doc[:,np.sum(term_per_doc!=0,axis=0)!=0]
-
-    # print(f"\nCompression ratio : {term_per_doc.shape[1]/term_per_doc_new.shape[1]:.2f}")
-
-    # new_idf = f_extract.idf[np.sum(term_per_doc!=0,axis=0)!=0]
-
-    # tf = np.array([v/np.sum(v) for v in term_per_doc_new])
-    # tfidf = tf*np.tile(new_idf[np.newaxis,:],(tf.shape[0],1))
 
 
-
-    # plt.matshow(tfidf)
-    # plt.matshow(term_per_doc_new*tfidf)
-    # plt.colorbar()
-    # plt.show()
-    # document_term_matrix = np.zeros()
-
+    embedded = f_extract.get_session_embedding(32)
+    embedded = embedded/np.sum(embedded,axis=1)[:,np.newaxis]
     
-    #print(embedded.shape)
-    # m_coh = []
-    # coh_25 = []
-    # coh_75 = []
+    distance = np.zeros((embedded.shape[0],embedded.shape[0]))
 
-    # k_list = [100,150,200,250,300,350]
+    for k in range(embedded.shape[0]):
+        for l in range(embedded.shape[0]):
+            distance[k,l] = jensenshannon(embedded[k],embedded[l])
 
-    # for K in k_list:
-    embedded = f_extract.get_session_embedding(4)
+    plt.pcolormesh(distance)
+    plt.xticks(np.arange(1,31),labels=[i+1 for i in range(30)])
+    plt.yticks(np.arange(1,31),labels=[i+1 for i in range(30)])
+    plt.grid()
+    plt.colorbar()
+    plt.show()
+
+
+    K = embedded.shape[1]
+    n_doc = embedded.shape[0]
+   
+
+    d_lim = np.ones(K)/K
+
+    print(f"Borne supérieure entropie = {-np.sum(d_lim*np.log2(d_lim)):.3f}")
+
+    H = []
+    max_topic = []
+
+    plt.figure()
+
+    for k in range(n_doc):
+        d = embedded[k]/np.sum(embedded[k])
+
+        H.append(-np.sum(d*np.log2(d)))
+        plt.annotate(str(np.argmax(d)),(k+0.12,H[-1]+0.01),fontsize=8)
+
+
+
+    plt.bar(np.arange(n_doc),H,align="edge")
+    plt.xlabel("Documents")
+    plt.xticks([])
+    plt.ylabel("H")
+    plt.title(f"Documents' entropy (max H = {-np.sum(d_lim*np.log2(d_lim)):.3f} )")
+    
+    
+    plt.figure()
+
+    topic_distrib = f_extract.topic_model.components_
+    K = topic_distrib.shape[0]
+
+    d_lim = np.ones(topic_distrib.shape[1])/topic_distrib.shape[1]
+
+    print(f"Borne supérieure entropie = {-np.sum(d_lim*np.log2(d_lim)):.3f}")
+
+    H = []
+
+    for k in range(K):
+        d = topic_distrib[k]/np.sum(topic_distrib[k])
+       
+        H.append(-np.sum(d*np.log2(d)))
+
+
+
+    plt.bar(np.arange(K),H,align="edge")
+    plt.plot(np.arange(-1,K+1),-np.sum(d_lim*np.log2(d_lim))*np.ones(K+2),"--r",label="max H")
+    plt.legend(loc='center right',bbox_to_anchor=(1,1.05))
+    plt.xlabel("Topics")
+    plt.xticks(np.arange(K),[str(k) for k in range(K)])
+    plt.ylabel("H")
+    plt.title(f"Topics' entropy (max H = {-np.sum(d_lim*np.log2(d_lim)):.3f} )")
+    
+
+
+    plt.figure()
+    min_H = np.argmin(H)
+    plt.bar(np.arange(topic_distrib.shape[1]),topic_distrib[min_H]/np.sum(topic_distrib[min_H]))
+    plt.title(H[min_H])
+
+    plt.show()
+
+    #plt.imshow(topic_distrib)
+    
+
         # coherence = CoherenceScore(f_extract,n_top_word=5)
         # m_coh.append(np.mean(coherence.compute_c_mass()))
         # coh_25.append(np.percentile(coherence.compute_c_mass(),25))
@@ -740,92 +755,73 @@ if __name__ == "__main__":
     
 
 
-    # plt.plot(k_list,m_coh)
-    # plt.fill_between(k_list,coh_25,coh_75,alpha=0.2)
-    # plt.show()
+    # z_session = TSNE(n_components=2,perplexity=7,random_state=0,init='pca',learning_rate='auto').fit_transform(normalize(embedded,z_score=True))
+    # z_session = normalize(z_session,z_score=True)
 
 
 
+    # C = 4
+    # profile = KMeans(n_clusters=C,random_state=42).fit(z_session)
 
-    
- 
-    # plt.plot(f_extract.dictionary.labels_[:index_0])
+    # # plt.figure()
 
-    # labels_id = labels#np.array_split(labels,10)
-    # distance = [[np.linalg.norm(p1 - p2) for p1 in labels_id] for p2 in labels_id]
-
-    # plt.matshow(distance)
-    
-    
-    
-    #z_session = LatentDirichletAllocation(n_components=2,random_state=42).fit_transform(normalize(labels))
-    z_session = TSNE(n_components=2,perplexity=7,random_state=0,init='pca',learning_rate='auto').fit_transform(normalize(embedded,z_score=True))
-    z_session = normalize(z_session,z_score=True)
+    # # for k in range(C):
+    # #     d = embedded[profile.labels_==k]
+    # #     plt.subplot(2,2,k+1)
+    # #     plt.bar(np.arange(embedded.shape[1]),np.mean(d,axis=0))
+    # #     plt.title(str(k)+" "+str(np.mean([[jensenshannon(p1,p2) for p1 in d] for p2 in d])))
 
 
+    # fig = plt.figure()
+    # ax = Axes3D(fig)#fig.add_subplot(projection='3d')
 
-    C = 4
-    profile = KMeans(n_clusters=C,random_state=42).fit(z_session)
+    # for i in range(C):
+    #     #v = z_session[i*3:(i+1)*3]
+    #     v = z_session[profile.labels_==i]
+        
+    #     #for k in range(3):
+    #     #ax.scatter(v[:,0],v[:,1],list(map(int,grades[i,:])),label=str(i+1)) #,list(map(int,grades[i,:]))
+        
+    #     grades_profile = np.array(list(map(int,grades.ravel())))[profile.labels_==i]
+    #     ax.scatter(v[:,0],v[:,1],grades_profile,label=str(i)) 
+
+
+
+    #     # for k in range(3):
+    #     #     plt.annotate(grades[i,k],(v[k][0]+0.01,v[k][1]+0.01))
+    #     #     plt.annotate("["+str(k+1)+"]",(v[k][0]+0.01,v[k][1]-0.1))
+
+
+    # # plt.title("Session embedding for each student (grade + [session])")
+    # #plt.legend(loc='center left',bbox_to_anchor=(1.2, 0.5))
+    # ax.set_xlabel("t-SNE 1")
+    # ax.set_ylabel("t-SNE 2")
+    # ax.set_zlabel("grade")
+    # fig.legend()
+
+
+    # # def rotate(angle):
+    # #     ax.view_init(azim=angle)
+
+    # # angle = 3
+    # # ani = animation.FuncAnimation(fig, rotate, frames=np.arange(0, 360, angle), interval=50)
+    # # ani.save('bigram_C10.gif', writer=animation.PillowWriter(fps=20))
+        
+
 
     # plt.figure()
 
-    # for k in range(C):
-    #     d = embedded[profile.labels_==k]
-    #     plt.subplot(2,2,k+1)
-    #     plt.bar(np.arange(embedded.shape[1]),np.mean(d,axis=0))
-    #     plt.title(str(k)+" "+str(np.mean([[jensenshannon(p1,p2) for p1 in d] for p2 in d])))
+    # for i in range(10):
+
+    #     v = z_session[i*3:(i+1)*3]    
+    #     plt.plot(v[:,0],v[:,1],'o-',label=str(i+1))
 
 
-    fig = plt.figure()
-    ax = Axes3D(fig)#fig.add_subplot(projection='3d')
+    #     for k in range(3):
+    #         plt.annotate(grades[i,k],(v[k][0]+0.01,v[k][1]+0.01))
+    #         plt.annotate("["+str(k+1)+"]",(v[k][0]+0.01,v[k][1]-0.1))
 
-    for i in range(C):
-        #v = z_session[i*3:(i+1)*3]
-        v = z_session[profile.labels_==i]
-        
-        #for k in range(3):
-        #ax.scatter(v[:,0],v[:,1],list(map(int,grades[i,:])),label=str(i+1)) #,list(map(int,grades[i,:]))
-        
-        grades_profile = np.array(list(map(int,grades.ravel())))[profile.labels_==i]
-        ax.scatter(v[:,0],v[:,1],grades_profile,label=str(i)) 
-
-
-
-        # for k in range(3):
-        #     plt.annotate(grades[i,k],(v[k][0]+0.01,v[k][1]+0.01))
-        #     plt.annotate("["+str(k+1)+"]",(v[k][0]+0.01,v[k][1]-0.1))
-
-
-    # plt.title("Session embedding for each student (grade + [session])")
-    #plt.legend(loc='center left',bbox_to_anchor=(1.2, 0.5))
-    ax.set_xlabel("t-SNE 1")
-    ax.set_ylabel("t-SNE 2")
-    ax.set_zlabel("grade")
-    fig.legend()
-
-
-    # def rotate(angle):
-    #     ax.view_init(azim=angle)
-
-    # angle = 3
-    # ani = animation.FuncAnimation(fig, rotate, frames=np.arange(0, 360, angle), interval=50)
-    # ani.save('bigram_C10.gif', writer=animation.PillowWriter(fps=20))
-        
-
-
-    plt.figure()
-
-    for i in range(10):
-
-        v = z_session[i*3:(i+1)*3]    
-        plt.plot(v[:,0],v[:,1],'o-',label=str(i+1))
-
-
-        for k in range(3):
-            plt.annotate(grades[i,k],(v[k][0]+0.01,v[k][1]+0.01))
-            plt.annotate("["+str(k+1)+"]",(v[k][0]+0.01,v[k][1]-0.1))
-
-    plt.show()
+    # plt.show()
 
 
 
