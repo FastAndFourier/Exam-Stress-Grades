@@ -315,6 +315,7 @@ def print_registry():
     print("")
     print("-"*os.get_terminal_size().columns)
 
+
     for v in registry:
         print(v,end=" "*(size_c[0]-len(str(v))))
         for i,v in enumerate(list(registry[v].values())[:-1]):
@@ -327,4 +328,4 @@ def print_registry():
 
 if __name__ == "__main__":
 
-    Dataset(['eda','hr','acc'],load=False,size_win=30)
+    Dataset(['acc','hr','eda'],load=False,size_win=60)
