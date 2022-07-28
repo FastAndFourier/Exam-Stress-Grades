@@ -12,7 +12,7 @@ from sklearn.metrics import confusion_matrix, accuracy_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.utils.class_weight import compute_class_weight
 
-np.random.seed(2)
+
 
 class Classifcation():
 
@@ -159,6 +159,9 @@ class Classifcation():
         print(f"Agreement on true predictions: mean = {np.mean(agreement_true):.2f} | std = {np.std(agreement_true):.2f}")
 
 
+        return [round(np.mean(accuracy),2), round(np.std(accuracy),2)], [round(np.mean(np.array(agreement_true)/100),2), round(np.std(np.array(agreement_true)/100),2)]
+
+
     def predict(self,y_true,y_pred):
 
         return np.argmax(np.bincount(y_pred))==np.argmax(np.bincount(y_true))
@@ -215,11 +218,31 @@ class Classifcation():
 
 if __name__ == "__main__":
 
+    np.random.seed(2)
+
     l_cat = [0,70,80,100]
-    model = Classifcation(l_cat,fold=4)
 
+    acc = []
+    agr = []
 
-    model.kFoldCV(k=10,mixed=True)
+    for k in range(1,5):
+        model = Classifcation(l_cat,fold=k)
+        acc_, agr_ = model.kFoldCV(k=5,mixed=True)
+
+        acc.append(acc_)
+        agr.append(agr_)
+
+        print(acc)
+        print(agr)
+
+    model = Classifcation(l_cat,fold=1)
+    acc_, agr_ = model.kFoldCV(k=5,mixed=False)
+
+    acc.append(acc_)
+    agr.append(agr_)    
+
+    print(acc)
+    print(agr)
 
     # id_test = np.array([0,1,2,15,16,17,24,25,26])#np.array([25,16,10,0,3,27,7])
     # X_train, y_train, id_train = model.training_dataset(id_test)
