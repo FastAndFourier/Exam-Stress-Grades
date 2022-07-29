@@ -275,7 +275,7 @@ class ProfileMining:
         #topics = self.topic_model.labels_
         #affinity_matrix = np.array([[np.exp(-jensenshannon(f(p1),f(p2))) for p1 in topics] for p2 in topics])
 
-        affinity_matrix = np.array([[np.exp(cosine(p1,p2)) for p1 in topics] for p2 in topics])
+        affinity_matrix = np.array([[np.exp(-jensenshannon(p1,p2)) for p1 in topics] for p2 in topics])
 
         self.profile_model = SpectralClustering(n_clusters=self.K,affinity='precomputed',random_state=42)
         labels = self.profile_model.fit_predict(affinity_matrix)
@@ -300,9 +300,9 @@ if __name__ == "__main__":
     dist_p = [[jensenshannon(np.histogram(s1,bins=128)[0],np.histogram(s2,bins=128)[0]) for s1 in session] for s2 in session]
 
 
-    model.remove_redundant_pattern()
-    model.remove_low_occ(occ=1)
-    model.remove_top_words(n_top=1)
+    #model.remove_redundant_pattern()
+    #model.remove_low_occ(occ=1)
+    #model.remove_top_words(n_top=1)
 
 
     if model.ngram==2:

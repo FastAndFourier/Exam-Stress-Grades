@@ -3,7 +3,8 @@ import matplotlib.pyplot as plt
 from itertools import combinations
 
 from Dataset import *
-from ProfileMining import get_grades
+
+from ProfileMining import get_grades, ProfileMining
 
 from sklearn.linear_model import LinearRegression
 from sklearn.svm import LinearSVR, LinearSVC
@@ -12,13 +13,28 @@ from sklearn.metrics import confusion_matrix, accuracy_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.utils.class_weight import compute_class_weight
 
+import argparse
+parser = argparse.ArgumentParser()
 
+parser.add_argument('-load',help="Load or create dataset",type=int,default=1,choices=[0,1])
+parser.add_argument('-mod',help="Modalities to use if load=False",type=str,nargs='*',choices=['eda','acc','hr'])
+parser.add_argument('-wsize',help="Window size to use if load=False",type=int,default=30)
+
+
+parser.add_argument('-C',help="Number of cluster for the bag of words",type=int,default=60)
+parser.add_argument('-lemm',help="Perform lemmatization",type=int,default=1,choices=[0,1])
+parser.add_argument('-ngram',help="n_grams' length",type=int,default=2)
+
+parser.add_argument('-T',help="Number of topic for the LDA",type=int,default=64)
+parser.add_argument('-K',help="Number of final clusters (profile)",type=int,default=4)
+parser.add_argument('-tfidf',help="Use tfidf as LDA's input, tf otherwise",type=int,default=1,choices=[0,1])
 
 class Classifcation():
 
     def __init__(self,label_cat,fold=1) -> None:
         
         dataset = Dataset()
+
 
         self.feature = dataset.feature
         self.index = np.insert(dataset.index.ravel(),0,0)
@@ -218,9 +234,12 @@ class Classifcation():
 
 if __name__ == "__main__":
 
+
+    args = parser.parse_args()
+
     np.random.seed(2)
 
-    l_cat = [0,70,80,100]
+    l_cat = [0,75,100]
 
     acc = []
     agr = []
@@ -236,6 +255,7 @@ if __name__ == "__main__":
         print(agr)
 
     model = Classifcation(l_cat,fold=1)
+
     acc_, agr_ = model.kFoldCV(k=5,mixed=False)
 
     acc.append(acc_)

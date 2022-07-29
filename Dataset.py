@@ -39,7 +39,7 @@ def normalize(x,z_score=False,nmin=0,nmax=1):
 
 class Dataset():
 
-    def __init__(self,modalities,load,size_win=30):
+    def __init__(self,modalities=["eda","hr","acc"],load=1,size_win=30):
 
         self.modalities = modalities
         self.size_win = size_win
@@ -55,6 +55,8 @@ class Dataset():
 
         
         f,i = self.build_feature_dataset(load)
+
+        
 
         self.feature = f
         self.index = i
@@ -328,4 +330,4 @@ def print_registry():
 
 if __name__ == "__main__":
 
-    Dataset(['acc','hr','eda'],load=False,size_win=60)
+    Dataset(['acc','hr','eda'],load=False,size_win=60*10)
